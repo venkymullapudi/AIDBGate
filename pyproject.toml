@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aidbgate"
+version = "0.1.0"
+description = "AI DB Gate — an RBAC + PAM enforcement gateway that lets AI agents read/write a database safely."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AIDBGate" }]
+keywords = ["mcp", "rbac", "pam", "database", "ai-agents", "security", "gateway"]
+dependencies = [
+    "sqlglot>=25.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# The MCP transport needs Python >=3.10 (the mcp SDK's floor); the core gate
+# itself runs on 3.9. Install this extra to run the agent-facing server.
+server = ["mcp>=1.2.0", "aiosqlite>=0.20.0"]
+postgres = ["asyncpg>=0.29.0"]
+mysql = ["aiomysql>=0.2.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "aiosqlite>=0.20.0"]
+
+[project.scripts]
+aidbgate = "aidbgate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

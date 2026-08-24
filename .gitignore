@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv*/
+venv/
+
+# AIDBGate local artifacts
+*.jsonl
+aidbgate-audit.jsonl
+examples/demo-audit.jsonl
+*.sqlite
+*.db

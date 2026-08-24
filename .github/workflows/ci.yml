@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: aidbgate
+          POSTGRES_DB: aidbgate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aidbgate"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (with dev + postgres extras)
+        run: pip install -e ".[dev,postgres]"
+
+      - name: Import sanity check
+        run: python -c "import aidbgate; print('aidbgate', aidbgate.__version__)"
+
+      - name: Run unit + adversarial tests (SQLite)
+        run: python -m pytest tests -q --ignore=tests/integration
+
+      - name: Run integration tests (live PostgreSQL)
+        env:
+          AIDBGATE_TEST_PG_DSN: postgresql://postgres:aidbgate@localhost:5432/aidbgate
+        run: python -m pytest tests/integration -v

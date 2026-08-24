@@ -1,0 +1,83 @@
+# Example AIDBGate policy — an ITSM (help-desk) workload sitting directly on the DB.
+#
+# Three agents share one multi-tenant database. The policy demonstrates every
+# enforcement primitive: role-scoped table access, per-tenant ROW filtering,
+# COLUMN redaction of PII, and an approval-gated privileged write.
+#
+# API keys are given inline for the demo (hashed on load). In production use
+# `api_key_env:` so the raw key never lives in the file.
+
+roles:
+  # A support agent: reads and triages tickets for its own tenant, may comment,
+  # may move a ticket's status. Can see customers but never their SSN.
+  support_agent:
+    description: Read/triage tickets and comment, scoped to one tenant, no PII.
+    permissions:
+      - effect: allow
+        actions: [select]
+        resources: [public.tickets, public.ticket_comments]
+        row_filter: "tenant_id = {ctx.tenant_id}"
+      - effect: allow
+        actions: [select]
+        resources: [public.customers]
+        row_filter: "tenant_id = {ctx.tenant_id}"
+        deny_columns: [ssn]          # PII redacted: SELECT * is blocked, SELECT ssn is denied
+      - effect: allow
+        actions: [insert]
+        resources: [public.ticket_comments]
+        # The gate pins tenant_id to the principal's tenant on INSERT: it is
+        # auto-filled when omitted and rejected if the agent forges another value.
+        row_filter: "tenant_id = {ctx.tenant_id}"
+      - effect: allow
+        actions: [update]
+        resources: [public.tickets]
+        row_filter: "tenant_id = {ctx.tenant_id}"
+
+  # A billing agent: may correct customer billing records, but any write to the
+  # customers table is privileged and requires human approval before it runs.
+  billing_agent:
+    description: Adjust customer billing records — privileged, approval-gated.
+    permissions:
+      - effect: allow
+        actions: [select]
+        resources: [public.customers, public.invoices]
+        row_filter: "tenant_id = {ctx.tenant_id}"
+        deny_columns: [ssn]
+      - effect: allow
+        actions: [update]
+        resources: [public.customers, public.invoices]
+        row_filter: "tenant_id = {ctx.tenant_id}"
+        require_approval: true
+
+  # Full operator access. The literal role name `admin` also unlocks the gate's
+  # operator tools (approve, elevate, audit).
+  admin:
+    description: Operator — full access and control-plane tools.
+    permissions:
+      - effect: allow
+        actions: [select, insert, update, delete]
+        resources: ["*"]
+
+principals:
+  - id: support-bot
+    description: Front-line help-desk assistant for the ACME tenant.
+    owner: helpdesk-team
+    api_key: support-dev-key
+    roles: [support_agent]
+    context:
+      tenant_id: acme
+
+  - id: billing-bot
+    description: Billing correction assistant for the ACME tenant.
+    owner: finance-team
+    api_key: billing-dev-key
+    roles: [billing_agent]
+    context:
+      tenant_id: acme
+
+  - id: admin-bot
+    description: Break-glass operator identity.
+    owner: platform-team
+    api_key: admin-dev-key
+    roles: [admin]
+    context: {}

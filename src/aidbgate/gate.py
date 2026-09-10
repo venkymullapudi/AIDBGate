@@ -281,6 +281,23 @@ class Gate:
             "effective_roles": decision.effective_roles,
         }
 
+    async def run_structured(self, principal: Principal, op: str, **kwargs: Any) -> GateResult:
+        """Run a structured (find/insert/update/delete) request.
+
+        Compiles the typed request to SQL with :mod:`aidbgate.querybuilder`, then
+        runs it through the exact same pipeline as raw SQL — so all enforcement
+        (row filters, redaction, approval, audit) applies unchanged. The agent
+        never authors SQL text.
+        """
+        from aidbgate.querybuilder import QueryBuilderError, build
+
+        try:
+            sql, mode = build(op, dialect=self.guard.dialect, **kwargs)
+        except QueryBuilderError as exc:
+            return self._deny(principal, f"structured:{op}", reason=str(exc),
+                              outcome="error")
+        return await self.handle_sql(principal, sql, mode)
+
     async def run_approved(self, principal: Principal, approval_id: str) -> GateResult:
         """Execute a previously-approved statement (exactly as approved)."""
         try:

@@ -222,6 +222,25 @@ be denied, which makes it usable as a CI gate on policy changes.
 | `execute(sql)` | Run an INSERT/UPDATE/DELETE. Risky writes → `pending_approval`. |
 | `run_approved(approval_id)` | Execute a statement an operator approved — exactly as approved. |
 
+**Two ways for an agent to talk to the gate.** An agent can send **raw SQL**
+(`query`/`execute`) *or* use the **structured tools** below — typed operations
+that the gate compiles to SQL deterministically, so the agent never authors SQL
+text. Either way the request runs through the *same* enforcement pipeline.
+
+| Structured tool | Purpose |
+|------|---------|
+| `find(table, filters, columns, order_by, limit)` | Read rows without writing SQL. |
+| `insert(table, values)` | Insert a row (scope column pinned by the gate). |
+| `update(table, values, filters, all)` | Update rows (filters required unless `all=True`). |
+| `delete(table, filters, all)` | Delete rows (filters required unless `all=True`). |
+
+`filters` is `{column: value}` (equality) or a list of
+`{"column","op","value"}` with `op` in
+`eq/ne/lt/lte/gt/gte/in/nin/like/ilike/is_null/not_null`. Identifiers are
+validated and values are bound literals, so there's no SQL-injection surface in
+this layer — and `update`/`delete` refuse to run unfiltered unless you pass
+`all=True`.
+
 Operator tools (require the `admin` role): `list_pending_approvals`,
 `decide_approval`, `elevate`, `audit_tail`.
 
@@ -326,6 +345,7 @@ src/aidbgate/
   pam.py         # JIT elevation + approval workflow (+ pluggable PamStore)
   audit.py       # append-only audit log (+ pluggable AuditSink)
   db.py          # pluggable executors (SQLite, PostgreSQL, MySQL, Null)
+  querybuilder.py  # structured find/insert/update/delete -> SQL (no raw SQL from agents)
   secrets.py     # secret-reference resolution (env/file/custom providers)
   observability.py # per-decision event emitter (metrics/tracing seam)
   gate.py        # the enforcement pipeline (composition root) + explain()

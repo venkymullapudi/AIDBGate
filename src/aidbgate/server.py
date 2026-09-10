@@ -129,6 +129,43 @@ async def run_approved(approval_id: str) -> Dict[str, Any]:
     return result.to_dict()
 
 
+# -- structured tools (compile to SQL, enforced by the same gate) -------------
+#
+# A friendlier, no-SQL interface for agents. `filters` is a JSON object of
+# {column: value} (equality) or a list of {"column","op","value"} where op is one
+# of eq/ne/lt/lte/gt/gte/in/nin/like/ilike/is_null/not_null.
+
+
+@mcp.tool()
+async def find(table: str, filters: Any = None, columns: Any = None,
+               order_by: Any = None, limit: Any = None) -> Dict[str, Any]:
+    """Read rows from a table without writing SQL. Row filters and column redaction still apply."""
+    return (await _gate.run_structured(
+        _principal, "find", table=table, filters=filters, columns=columns,
+        order_by=order_by, limit=limit)).to_dict()
+
+
+@mcp.tool()
+async def insert(table: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert a row. The scope column is pinned to the principal's context by the gate."""
+    return (await _gate.run_structured(_principal, "insert", table=table, values=values)).to_dict()
+
+
+@mcp.tool()
+async def update(table: str, values: Dict[str, Any], filters: Any = None,
+                 all: bool = False) -> Dict[str, Any]:
+    """Update rows matching filters (required unless all=True). Risky writes may need approval."""
+    return (await _gate.run_structured(
+        _principal, "update", table=table, values=values, filters=filters, all=all)).to_dict()
+
+
+@mcp.tool()
+async def delete(table: str, filters: Any = None, all: bool = False) -> Dict[str, Any]:
+    """Delete rows matching filters (required unless all=True). Deletes are policy-gated."""
+    return (await _gate.run_structured(
+        _principal, "delete", table=table, filters=filters, all=all)).to_dict()
+
+
 # -- operator tools (admin role required) ------------------------------------
 
 

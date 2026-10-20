@@ -39,6 +39,7 @@ class Settings:
     audit_path: str
     api_key: Optional[str]
     seed_sql: Optional[str]
+    nl_translator: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,6 +52,7 @@ class Settings:
             audit_path=os.environ.get("AIDBGATE_AUDIT_LOG", "./aidbgate-audit.jsonl"),
             api_key=os.environ.get("AIDBGATE_API_KEY"),
             seed_sql=os.environ.get("AIDBGATE_SEED_SQL"),
+            nl_translator=os.environ.get("AIDBGATE_NL"),
         )
 
 
@@ -64,5 +66,14 @@ def build_gate(settings: Optional[Settings] = None,
     executor: Executor = make_executor(settings.backend, dsn)
     audit = AuditLog(settings.audit_path)
     guard = SqlGuard(dialect=executor.dialect, default_schema=executor.default_schema)
+    translator = _make_translator(settings.nl_translator)
     return Gate(policy=policy, executor=executor, audit=audit,
-                pam=PamBroker(), guard=guard, observer=observer)
+                pam=PamBroker(), guard=guard, observer=observer, translator=translator)
+
+
+def _make_translator(name: Optional[str]):
+    """Choose the natural-language translator (default: rule-based, offline)."""
+    if name and name.lower() in ("llm", "claude", "anthropic"):
+        from aidbgate.nl import LLMTranslator
+        return LLMTranslator()
+    return None  # Gate falls back to the deterministic RuleBasedTranslator

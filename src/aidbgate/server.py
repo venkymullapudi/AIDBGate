@@ -166,6 +166,18 @@ async def delete(table: str, filters: Any = None, all: bool = False) -> Dict[str
         _principal, "delete", table=table, filters=filters, all=all)).to_dict()
 
 
+@mcp.tool()
+async def ask(text: str, confirm: bool = False) -> Dict[str, Any]:
+    """Ask the database in plain English (e.g. "show open tickets", "how many customers").
+
+    Reads run immediately (still RBAC- and redaction-enforced). A write returns a
+    preview of the exact statement it compiled to and requires confirm=True to
+    execute — so natural language never silently changes data. The reply always
+    echoes how the request was interpreted.
+    """
+    return (await _gate.run_nl(_principal, text, confirm=confirm)).to_dict()
+
+
 # -- operator tools (admin role required) ------------------------------------
 
 

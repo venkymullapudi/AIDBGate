@@ -241,6 +241,25 @@ validated and values are bound literals, so there's no SQL-injection surface in
 this layer — and `update`/`delete` refuse to run unfiltered unless you pass
 `all=True`.
 
+### Natural language (`ask`)
+
+There's also an `ask(text)` tool for plain English — "show the open tickets",
+"how many customers", "set status to closed on tickets where id is 1". It works
+the safe way:
+
+```
+text → translator → a structured/SQL candidate → the SAME gate pipeline
+```
+
+The translator is **untrusted**: a mistranslation or a prompt-injected sentence
+can never exceed the principal's grant, because the gate still enforces RBAC, row
+filters, redaction and approval on the compiled statement. The translator is also
+only shown the schema the principal may read, so it stays in scope. **Reads run
+immediately; writes return a preview of the exact compiled statement and require
+`confirm=true`** — words never silently mutate data. Two translators ship: a
+deterministic offline one (default, no API key) and an optional LLM-backed one
+(`AIDBGATE_NL=llm`) that falls back to the deterministic one when unavailable.
+
 Operator tools (require the `admin` role): `list_pending_approvals`,
 `decide_approval`, `elevate`, `audit_tail`.
 
@@ -345,6 +364,7 @@ src/aidbgate/
   pam.py         # JIT elevation + approval workflow (+ pluggable PamStore)
   audit.py       # append-only audit log (+ pluggable AuditSink)
   db.py          # pluggable executors (SQLite, PostgreSQL, MySQL, Null)
+  nl.py            # natural-language -> structured request (RuleBased + optional LLM)
   querybuilder.py  # structured find/insert/update/delete -> SQL (no raw SQL from agents)
   secrets.py     # secret-reference resolution (env/file/custom providers)
   observability.py # per-decision event emitter (metrics/tracing seam)

@@ -68,6 +68,7 @@ class Gate:
         pam: Optional[PamBroker] = None,
         guard: Optional[SqlGuard] = None,
         observer: Optional[Observer] = None,
+        translator: Optional[Any] = None,
     ):
         self.policy = policy
         self.engine = PolicyEngine(policy)
@@ -79,6 +80,7 @@ class Gate:
             default_schema=getattr(executor, "default_schema", "public"),
         )
         self.observer = observer or NullObserver()
+        self.translator = translator  # natural-language translator (optional)
 
     # -- identity -------------------------------------------------------------
 
@@ -281,6 +283,78 @@ class Gate:
             "effective_roles": decision.effective_roles,
         }
 
+    async def _readable_schema(self, principal: Principal) -> Dict[str, List[str]]:
+        """Tables the principal may read, each with its non-redacted columns.
+
+        This is exactly what a natural-language translator is allowed to see — so
+        it can only ever produce in-scope requests, and never learns the names of
+        tables or columns the principal cannot access.
+        """
+        extra = self.pam.active_roles(principal.id)
+        schema: Dict[str, List[str]] = {}
+        for table in await self.list_tables(principal):
+            cols = [c["name"] for c in await self.executor.describe(table)]
+            decision = self.engine.evaluate(
+                principal, Action.SELECT, [table], extra_roles=extra)
+            denied = {d.split(".")[-1].lower() for d in decision.deny_columns}
+            schema[table] = [c for c in cols if c.lower() not in denied]
+        return schema
+
+    async def run_nl(self, principal: Principal, text: str,
+                     translator: Optional[Any] = None,
+                     confirm: bool = False) -> GateResult:
+        """Answer a natural-language request against the database.
+
+        Flow: translate English → a candidate request (structured op or SQL),
+        scoped to what the principal can read → run through the normal pipeline.
+        Reads execute; writes return a **preview** (compiled SQL + decision) and
+        require ``confirm=True`` before they run — a human-in-the-loop check so
+        words never silently mutate data. The translator is untrusted; the gate
+        still enforces RBAC, row filters, redaction and approval on the result.
+        """
+        from aidbgate.nl import NLError, RuleBasedTranslator
+        from aidbgate.querybuilder import QueryBuilderError, build
+
+        tr = translator or self.translator or RuleBasedTranslator()
+        schema = await self._readable_schema(principal)
+        try:
+            req = tr.translate(text, schema=schema, context=principal.context)
+        except NLError as exc:
+            self.observer.event("request", outcome="not_understood",
+                                principal=principal.id, action="nl")
+            return GateResult(status="error", reason=str(exc))
+
+        # Compile the candidate to a concrete SQL string + read/write mode.
+        if req.kind == "sql":
+            sql, mode = req.sql or "", ("write" if req.mode == "write" else "read")
+        else:
+            try:
+                sql, mode = build(req.op, dialect=self.guard.dialect,
+                                  default_schema=self.guard.default_schema, **req.kwargs)
+            except QueryBuilderError as exc:
+                return GateResult(status="error", reason=str(exc))
+
+        interpretation = {"interpretation": req.interpreted,
+                          "request": {"kind": req.kind, "op": req.op, **(req.kwargs or {})}}
+
+        if mode == "write" and not confirm:
+            # Preview only: show exactly what the words compiled to, don't run it.
+            preview = self.explain(principal, sql, mode)
+            data = {**interpretation, "compiled_sql": sql, "preview": preview}
+            if not preview.get("allowed"):
+                # No point asking to confirm a write the policy would reject.
+                return GateResult(status="denied", data=data,
+                                  reason=preview.get("reason", "not permitted"))
+            return GateResult(status="needs_confirmation", data=data,
+                              reason="natural-language write — confirm to run",
+                              effective_sql=preview.get("effective_sql", ""))
+
+        res = await self.handle_sql(principal, sql, mode)
+        if res.data is None:
+            res.data = {}
+        res.data.update(interpretation)
+        return res
+
     async def run_structured(self, principal: Principal, op: str, **kwargs: Any) -> GateResult:
         """Run a structured (find/insert/update/delete) request.
 
@@ -292,7 +366,8 @@ class Gate:
         from aidbgate.querybuilder import QueryBuilderError, build
 
         try:
-            sql, mode = build(op, dialect=self.guard.dialect, **kwargs)
+            sql, mode = build(op, dialect=self.guard.dialect,
+                              default_schema=self.guard.default_schema, **kwargs)
         except QueryBuilderError as exc:
             return self._deny(principal, f"structured:{op}", reason=str(exc),
                               outcome="error")

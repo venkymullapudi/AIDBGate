@@ -62,8 +62,16 @@ def _ident(name: str, *, allow_schema: bool = False) -> str:
     return name
 
 
-def _table(name: str) -> "exp.Table":
+def _table(name: str, default_schema: Optional[str] = None) -> "exp.Table":
     _ident(name, allow_schema=True)
+    # Drop a leading default-schema qualifier (e.g. "public.") so the emitted SQL
+    # is a bare table name. This works everywhere: Postgres/MySQL resolve it via
+    # the search path / current database, and SQLite (which has no schemas) would
+    # otherwise fail on "public.tickets". A non-default schema is kept verbatim.
+    if default_schema and "." in name:
+        schema, leaf = name.split(".", 1)
+        if schema.lower() == default_schema.lower():
+            name = leaf
     return exp.to_table(name)
 
 
@@ -145,12 +153,17 @@ def build_find(
     columns: Optional[List[str]] = None,
     order_by: Optional[List[Dict[str, Any]]] = None,
     limit: Optional[int] = None,
+    count: bool = False,
     dialect: str = "postgres",
+    default_schema: Optional[str] = None,
 ) -> Tuple[str, str]:
-    tbl = _table(table)
-    selects: List[exp.Expression] = (
-        [_col(c) for c in columns] if columns else [exp.Star()]
-    )
+    tbl = _table(table, default_schema)
+    if count:
+        selects: List[exp.Expression] = [exp.Count(this=exp.Star())]
+    elif columns:
+        selects = [_col(c) for c in columns]
+    else:
+        selects = [exp.Star()]
     select = exp.select(*selects).from_(tbl)
     where = _where(_normalize_filters(filters))
     if where is not None:
@@ -165,11 +178,12 @@ def build_find(
     return select.sql(dialect=dialect), "read"
 
 
-def build_insert(table: str, values: Dict[str, Any], dialect: str = "postgres") -> Tuple[str, str]:
+def build_insert(table: str, values: Dict[str, Any], dialect: str = "postgres",
+                 default_schema: Optional[str] = None) -> Tuple[str, str]:
     if not isinstance(values, dict) or not values:
         raise QueryBuilderError("insert needs a non-empty 'values' dict")
     cols = [_col(c) for c in values]
-    schema = exp.Schema(this=_table(table), expressions=cols)
+    schema = exp.Schema(this=_table(table, default_schema), expressions=cols)
     row = exp.tuple_(*[_lit(v) for v in values.values()])
     insert = exp.Insert(this=schema, expression=exp.Values(expressions=[row]))
     return insert.sql(dialect=dialect), "write"
@@ -181,6 +195,7 @@ def build_update(
     filters: Filters = None,
     all: bool = False,
     dialect: str = "postgres",
+    default_schema: Optional[str] = None,
 ) -> Tuple[str, str]:
     if not isinstance(values, dict) or not values:
         raise QueryBuilderError("update needs a non-empty 'values' dict")
@@ -189,7 +204,7 @@ def build_update(
         raise QueryBuilderError(
             "refusing to UPDATE without filters; pass filters or all=True")
     eqs = [exp.EQ(this=_col(c), expression=_lit(v)) for c, v in values.items()]
-    update = exp.Update(this=_table(table), expressions=eqs)
+    update = exp.Update(this=_table(table, default_schema), expressions=eqs)
     where = _where(norm)
     if where is not None:
         update.set("where", exp.Where(this=where))
@@ -201,19 +216,21 @@ def build_delete(
     filters: Filters = None,
     all: bool = False,
     dialect: str = "postgres",
+    default_schema: Optional[str] = None,
 ) -> Tuple[str, str]:
     norm = _normalize_filters(filters)
     if not norm and not all:
         raise QueryBuilderError(
             "refusing to DELETE without filters; pass filters or all=True")
-    delete = exp.Delete(this=_table(table))
+    delete = exp.Delete(this=_table(table, default_schema))
     where = _where(norm)
     if where is not None:
         delete.set("where", exp.Where(this=where))
     return delete.sql(dialect=dialect), "write"
 
 
-def build(op: str, dialect: str = "postgres", **kwargs: Any) -> Tuple[str, str]:
+def build(op: str, dialect: str = "postgres",
+          default_schema: Optional[str] = None, **kwargs: Any) -> Tuple[str, str]:
     """Dispatch a structured op name to the matching builder. Returns (sql, mode)."""
     op = op.lower()
     builders = {
@@ -225,4 +242,4 @@ def build(op: str, dialect: str = "postgres", **kwargs: Any) -> Tuple[str, str]:
     if op not in builders:
         raise QueryBuilderError(
             f"unknown op {op!r} (use find/insert/update/delete)")
-    return builders[op](dialect=dialect, **kwargs)
+    return builders[op](dialect=dialect, default_schema=default_schema, **kwargs)
